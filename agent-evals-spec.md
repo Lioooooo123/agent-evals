@@ -145,6 +145,19 @@ agent-evals/
         "match_mode": "exact"
       }
     ],
+    "workspace": {
+      "files_changed": [],
+      "files_forbidden": [],
+      "allow_extra_changes": true
+    },
+    "commands": [
+      {
+        "cmd": "true",
+        "cwd": ".",
+        "timeout_s": 60,
+        "must_pass": true
+      }
+    ],
     "outcome": {
       "task_success": true,
       "handoff_required": false
@@ -163,6 +176,8 @@ agent-evals/
 - `id` 必须唯一。
 - `input.messages` 兼容 OpenAI/LangChain 常见 message shape。
 - `expected.tool_calls` 支持 `strict`、`unordered`、`subset`、`superset` 四种 trajectory match。
+- `expected.workspace` 用于代码 agent 的文件结果检查；路径一律相对被测 workspace，禁止写绝对路径。
+- `expected.commands` 用于 outcome 验证；命令在隔离 workspace 内执行，必须显式声明 `cwd`、`timeout_s` 和 `must_pass`。
 - `metadata.tags` 用于报告切片。
 
 ### 7.2 Trace
@@ -319,6 +334,18 @@ hard_fail:
   format_compliance: 0
 ```
 
+聚合字段来源：
+
+| aggregate key | 来源 |
+| --- | --- |
+| `task_success` | `TaskSuccessJudgeScorer.overall_score` 或 deterministic outcome scorer |
+| `tool_call_accuracy` | `ToolTrajectoryScorer.score` |
+| `final_answer_correctness` | `AnswerRuleScorer.score` 和 judge answer 维度的加权结果 |
+| `grounding` | `TaskSuccessJudgeScorer.grounding` |
+| `efficiency` | `ExecutionMetricsScorer.score` 或 judge efficiency 维度 |
+| `safety` | safety rule scorer 或 `TaskSuccessJudgeScorer.safety` |
+| `format_compliance` | `AnswerRuleScorer.format_compliance` |
+
 ### 8.3 Judge Rubric
 
 Judge 只处理规则无法稳定判断的语义问题。工具参数、格式、文件存在、外部状态这类确定性检查必须优先走 rule scorer。
@@ -403,9 +430,20 @@ Pi 任务 case 在通用 `EvalCase` 上扩展 `metadata.pi`：
     ]
   },
   "expected": {
-    "files_changed": ["src/auth.py"],
-    "commands_pass": ["pytest tests/test_auth.py"],
     "answer_contains": ["修复", "测试"],
+    "workspace": {
+      "files_changed": ["src/auth.py"],
+      "files_forbidden": [".env", "secrets.json"],
+      "allow_extra_changes": false
+    },
+    "commands": [
+      {
+        "cmd": "pytest tests/test_auth.py",
+        "cwd": ".",
+        "timeout_s": 120,
+        "must_pass": true
+      }
+    ],
     "outcome": {
       "task_success": true
     }
@@ -418,11 +456,18 @@ Pi 任务 case 在通用 `EvalCase` 上扩展 `metadata.pi`：
       "workspace": "/tmp/agent-evals/pi/case_001",
       "timeout_s": 600,
       "session_jsonl": null,
-      "post_run_commands": ["pytest tests/test_auth.py"]
+      "agent_dir": "/tmp/agent-evals/pi/agent_dir_case_001",
+      "session_discovery": "agent_dir_latest"
     }
   }
 }
 ```
+
+`metadata.pi.agent_dir` 是 Pi 本次运行的独立配置目录，用于把 session 文件和当前 eval case 绑定。`session_discovery` 支持：
+
+- `explicit`：使用 `metadata.pi.session_jsonl` 指定的文件。
+- `agent_dir_latest`：只在本 case 独立 `agent_dir` 下按 mtime 取最新 session，禁止跨全局 session 目录搜索。
+- `none`：不解析 session，只做黑盒 outcome scoring。
 
 ### 10.3 PiAgentAdapter 契约
 
@@ -435,14 +480,15 @@ class PiAgentAdapter:
 执行步骤：
 
 1. 准备隔离 workspace。真实任务使用 git worktree 或临时 copy，避免污染原仓库。
-2. 记录初始状态：`git status --short`、`git diff --stat`、关键文件 hash。
-3. 启动 Pi，传入用户任务。
-4. 收集 stdout、stderr、exit code、latency。
-5. 查找本次 Pi session JSONL，如果 case 指定了 `session_jsonl` 则使用指定文件。
-6. 解析 session JSONL 为 trace steps。
-7. 运行 `post_run_commands`，例如测试命令。
-8. 记录最终状态：git diff、文件变化、测试结果。
-9. 返回 `AgentOutput`。
+2. 准备独立 Pi `agent_dir`，并把本次 run id / case id 写入 adapter metadata。
+3. 记录初始状态：`git status --short`、`git diff --stat`、关键文件 hash。
+4. 启动 Pi，传入用户任务，并让 Pi 使用本 case 的 workspace 和 `agent_dir`。
+5. 收集 stdout、stderr、exit code、latency。
+6. 按 `session_discovery` 解析本次 Pi session JSONL；如果无法唯一定位 session，记录 parser failure 并退回黑盒 outcome scoring。
+7. 解析 session JSONL 为 trace steps。
+8. 运行 `expected.commands`，例如测试命令。
+9. 记录最终状态：git diff、文件变化、测试结果。
+10. 返回 `AgentOutput`。
 
 ### 10.4 Pi Trace 映射
 
@@ -450,7 +496,7 @@ Pi session / event 到标准 trace 的映射：
 
 | Pi 来源 | 标准 TraceStep |
 | --- | --- |
-| user message | `type=llm_input` 或保存在 trace input |
+| user message | 保存在 trace input，不生成 `TraceStep` |
 | assistant message text | `type=llm`，`summary` 为文本摘要 |
 | assistant content `toolCall` | `type=tool_call`，记录 tool name 和 arguments |
 | toolResult message | `type=observation`，记录 result content、details、isError |
@@ -466,7 +512,7 @@ Pi session / event 到标准 trace 的映射：
 Pi code-agent eval 不能只看最终回答，必须检查真实 outcome：
 
 - `WorkspaceDiffScorer`：检查是否改了预期文件、是否改了禁止文件、diff 是否为空。
-- `CommandPassScorer`：运行 `expected.commands_pass` 或 `metadata.pi.post_run_commands`。
+- `CommandPassScorer`：运行 `expected.commands`。
 - `FinalAnswerGroundingScorer`：检查最终回答是否与测试和文件状态一致。
 - `PiToolTrajectoryScorer`：基于 session/event 检查工具名、参数和顺序。
 - `NoUncommittedNoiseScorer`：检查是否产生无关临时文件、大文件或敏感文件。
@@ -625,10 +671,14 @@ gates:
 - answer rule scorer。
 - tool trajectory scorer。
 - execution metrics scorer。
+- Pi session JSONL parser。
+- Pi faux provider harness integration test。
 
 验收：
 
 - 5 条 sample cases 可以稳定评分。
+- 能从 Pi session fixture 中提取 tool calls 和 tool results。
+- 能用 Pi faux provider harness 跑 1 条 deterministic tool-call case，且不依赖真实 API key。
 
 ### M3: Judge + Reports
 
@@ -657,14 +707,14 @@ gates:
 产出：
 
 - `PiAgentAdapter` 黑盒 CLI mode。
-- Pi session JSONL parser。
-- Pi faux provider harness integration test。
+- Pi 独立 `agent_dir` session 绑定。
+- Pi workspace diff 和 command outcome scorer。
 
 验收：
 
 - 能对 Pi 跑一条 code-agent eval case。
-- 能从 Pi session 中提取 tool calls 和 tool results。
-- 能用 workspace diff 和 post-run command 判断真实 outcome。
+- 能唯一定位本次 Pi session，或明确退回黑盒 outcome scoring。
+- 能用 workspace diff 和 `expected.commands` 判断真实 outcome。
 
 ## 15. 主要风险
 
