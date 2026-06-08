@@ -371,9 +371,128 @@ class AgentAdapter(Protocol):
 - `LlamaIndexAdapter`
 - `OTelTraceAdapter`
 
-## 10. 报告
+## 10. PiAgentAdapter 设计
 
-### 10.1 eval_report.md
+Pi 是第一个推荐接入的被测 agent。它当前没有独立的产品化 evals 目录，但已有可复用的观测入口：
+
+- CLI/print mode：可黑盒执行任务，收集 stdout、stderr、exit code、耗时和 workspace diff。
+- Session JSONL：Pi session 是 JSONL，可解析 user、assistant、toolResult、bashExecution、custom、compactionSummary 等消息。
+- Extension events：Pi extension/runtime 可观测 `message_end`、`tool_call`、`tool_result` 等事件。
+- Test suite harness：`packages/coding-agent/test/suite/harness.ts` 支持 faux provider 和事件收集，适合 deterministic regression eval，不消耗真实模型 token。
+
+### 10.1 接入层级
+
+| 层级 | 入口 | 能观测什么 | 适用场景 |
+| --- | --- | --- | --- |
+| 黑盒 | Pi CLI / print mode | 最终输出、退出码、文件变化、测试结果 | 真实 agent 端到端任务 |
+| 半白盒 | Session JSONL | 消息树、assistant tool calls、toolResult、bashExecution、token/cost | 离线 trace scoring |
+| 白盒 | Extension events / test harness | `message_end`、`tool_call`、`tool_result`、runtime events | 工具轨迹、回归测试、无 token 测试 |
+
+第一版先实现黑盒 + session JSONL 解析；如果后续要测 Pi 内部工具轨迹，再实现 extension event recorder。
+
+### 10.2 PiEvalCase 扩展字段
+
+Pi 任务 case 在通用 `EvalCase` 上扩展 `metadata.pi`：
+
+```json
+{
+  "id": "pi_fix_auth_bug",
+  "input": {
+    "messages": [
+      {"role": "user", "content": "修复登录接口空密码时崩溃的问题，并运行相关测试。"}
+    ]
+  },
+  "expected": {
+    "files_changed": ["src/auth.py"],
+    "commands_pass": ["pytest tests/test_auth.py"],
+    "answer_contains": ["修复", "测试"],
+    "outcome": {
+      "task_success": true
+    }
+  },
+  "metadata": {
+    "agent": "pi",
+    "tags": ["code_agent", "bugfix", "tool_call"],
+    "pi": {
+      "mode": "cli",
+      "workspace": "/tmp/agent-evals/pi/case_001",
+      "timeout_s": 600,
+      "session_jsonl": null,
+      "post_run_commands": ["pytest tests/test_auth.py"]
+    }
+  }
+}
+```
+
+### 10.3 PiAgentAdapter 契约
+
+```python
+class PiAgentAdapter:
+    def run(self, case: EvalCase, recorder: TraceRecorder) -> AgentOutput:
+        ...
+```
+
+执行步骤：
+
+1. 准备隔离 workspace。真实任务使用 git worktree 或临时 copy，避免污染原仓库。
+2. 记录初始状态：`git status --short`、`git diff --stat`、关键文件 hash。
+3. 启动 Pi，传入用户任务。
+4. 收集 stdout、stderr、exit code、latency。
+5. 查找本次 Pi session JSONL，如果 case 指定了 `session_jsonl` 则使用指定文件。
+6. 解析 session JSONL 为 trace steps。
+7. 运行 `post_run_commands`，例如测试命令。
+8. 记录最终状态：git diff、文件变化、测试结果。
+9. 返回 `AgentOutput`。
+
+### 10.4 Pi Trace 映射
+
+Pi session / event 到标准 trace 的映射：
+
+| Pi 来源 | 标准 TraceStep |
+| --- | --- |
+| user message | `type=llm_input` 或保存在 trace input |
+| assistant message text | `type=llm`，`summary` 为文本摘要 |
+| assistant content `toolCall` | `type=tool_call`，记录 tool name 和 arguments |
+| toolResult message | `type=observation`，记录 result content、details、isError |
+| bashExecution message | `type=tool_call` + `observation`，tool name 固定为 `bash` |
+| message usage | trace metrics 的 token/cost |
+| extension `tool_call` event | `type=tool_call` |
+| extension `tool_result` event | `type=observation` |
+
+工具调用 scorer 优先使用 extension events；没有 events 时退回 session JSONL；再没有 session 时只做黑盒 outcome scoring。
+
+### 10.5 Pi Outcome Scorers
+
+Pi code-agent eval 不能只看最终回答，必须检查真实 outcome：
+
+- `WorkspaceDiffScorer`：检查是否改了预期文件、是否改了禁止文件、diff 是否为空。
+- `CommandPassScorer`：运行 `expected.commands_pass` 或 `metadata.pi.post_run_commands`。
+- `FinalAnswerGroundingScorer`：检查最终回答是否与测试和文件状态一致。
+- `PiToolTrajectoryScorer`：基于 session/event 检查工具名、参数和顺序。
+- `NoUncommittedNoiseScorer`：检查是否产生无关临时文件、大文件或敏感文件。
+
+### 10.6 Faux Provider Regression Mode
+
+Pi 自带 `packages/coding-agent/test/suite/harness.ts` 和 faux provider，适合测 deterministic agent runtime 行为：
+
+- 不使用真实 provider API。
+- 不消耗 token。
+- 可以预设 assistant responses 和 tool calls。
+- 可以断言 `AgentSessionEvent[]`。
+
+这个模式不用于评估真实模型能力，而用于验证 Pi adapter、trace recorder、tool trajectory scorer 和 regression case 是否稳定。
+
+### 10.7 限制
+
+- 黑盒 CLI 无法可靠还原真实工具调用，只能观察 outcome。
+- Session JSONL 是离线记录，可能缺少工具执行前的参数变更细节。
+- Extension events 最准确，但需要 Pi runtime 支持加载 recorder extension。
+- 真实模型 eval 成本和不确定性较高，需要和 faux provider regression 分开。
+- Pi 默认不提供强权限隔离；真实 eval 应在临时目录、容器、sandbox 或 git worktree 中运行。
+
+## 11. 报告
+
+### 11.1 eval_report.md
 
 必须包含：
 
@@ -384,7 +503,7 @@ class AgentAdapter(Protocol):
 - top regressions。
 - 建议下一步。
 
-### 10.2 failed_cases.md
+### 11.2 failed_cases.md
 
 每个失败 case 展示：
 
@@ -405,7 +524,7 @@ Reason:
 工具参数把 A123 写成 A132，最终答案没有 observation 支持。
 ```
 
-### 10.3 summary.csv
+### 11.3 summary.csv
 
 字段：
 
@@ -421,7 +540,7 @@ Reason:
 - `cost_usd`
 - `tags`
 
-## 11. Baseline 对比
+## 12. Baseline 对比
 
 `agent-evals compare` 输出：
 
@@ -445,9 +564,9 @@ gates:
     max: 0.00
 ```
 
-## 12. 验证计划
+## 13. 验证计划
 
-### 12.1 单元测试
+### 13.1 单元测试
 
 - JSONL dataset loader 能识别重复 id 和非法 schema。
 - trace recorder 能按顺序记录 step。
@@ -455,22 +574,24 @@ gates:
 - answer rule scorer 覆盖 contains、must_not_contain、regex、JSON schema。
 - aggregate scorer 覆盖 hard fail 和权重。
 - compare 命令覆盖指标下降、修复、新增失败。
+- Pi session JSONL parser 能把 assistant toolCall、toolResult、bashExecution 映射为 trace steps。
 
-### 12.2 集成测试
+### 13.2 集成测试
 
 - 用 `MockAgentAdapter` 跑 5 条 sample cases。
 - 生成完整 run 目录。
 - 验证 `eval_results.jsonl` 行数等于 case 数。
 - 验证失败 case 出现在 `failed_cases.md`。
 - 验证 compare 能对 baseline/candidate 返回正确 exit code。
+- 用 Pi faux provider harness 跑 1 条 deterministic tool-call case，验证 recorder 不依赖真实 API key。
 
-### 12.3 人工验收
+### 13.3 人工验收
 
 - 打开 `eval_report.md`，不用看 JSON 能判断本次 run 是否可接受。
 - 打开一个失败 case，能定位是工具、答案、格式、安全还是执行问题。
 - 修改 mock agent 制造回归，compare 能识别。
 
-## 13. 里程碑
+## 14. 里程碑
 
 ### M0: Spec Review
 
@@ -531,19 +652,37 @@ gates:
 
 - 人为制造回归时 compare 失败。
 
-## 14. 主要风险
+### M5: Pi Adapter
+
+产出：
+
+- `PiAgentAdapter` 黑盒 CLI mode。
+- Pi session JSONL parser。
+- Pi faux provider harness integration test。
+
+验收：
+
+- 能对 Pi 跑一条 code-agent eval case。
+- 能从 Pi session 中提取 tool calls 和 tool results。
+- 能用 workspace diff 和 post-run command 判断真实 outcome。
+
+## 15. 主要风险
 
 - Judge 不稳定：通过规则优先、schema 校验、rubric 版本、gold case 校准降低风险。
 - Trace schema 过早锁死：MVP 先做内部 schema，后续用 adapter 转 OTel。
 - Agent 框架差异大：第一版只承诺 custom function 和 mock，其他框架后续 adapter 化。
 - 报告信息过多：第一版报告优先展示失败原因和指标变化，不做大而全 dashboard。
 - 数据集质量不足：优先沉淀真实失败、高频任务和边界 case，而不是追求数量。
+- Pi 真实任务 eval 容易修改本地工作区：必须使用临时 workspace、git worktree、容器或 sandbox。
+- Pi session/event schema 可能随上游变化：adapter 需要版本检测和解析失败提示。
 
-## 15. 参考来源
+## 16. 参考来源
 
 - OpenAI Agent Evals: https://platform.openai.com/docs/guides/agent-evals
 - LangChain Agent Evals: https://docs.langchain.com/oss/python/langchain/evals
 - Braintrust scorers: https://www.braintrust.dev/docs/evaluate/write-scorers
 - agentevals GitHub: https://github.com/agentevals-dev/agentevals
 - Agent Evals open spec: https://agentevals.io/
+- Pi GitHub: https://github.com/earendil-works/pi
+- Pi session format: https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md
 - 用户提供调研文档：`agent_evals_tools_research.md`
