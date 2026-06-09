@@ -4,9 +4,9 @@
 上游格式文档：<https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md>  
 样本来源：HuggingFace dataset `badlogicgames/pi-mono`，`repo_type="dataset"`  
 样本文件：`2026-03-02T20-53-11-495Z_9084660c-d6dd-42f7-8892-91d565b75da5.jsonl`  
-固定 fixture：`cases/fixtures/pi_session_sample.jsonl`
+固定 fixture：`cases/fixtures/pi_session_sample.jsonl`（脱敏版）
 
-选择过程：主 dataset `badlogicgames/pi-mono` 有 627 个 `.jsonl` 文件，备份 dataset `aaaaliou/pi-mono` 有 146 个 `.jsonl` 文件。按文件大小取主 dataset 前 5 个候选后统计行数，最终选择行数最多的样本：495 行，约 3.4 MB。
+选择过程：主 dataset `badlogicgames/pi-mono` 有 627 个 `.jsonl` 文件，备份 dataset `aaaaliou/pi-mono` 有 146 个 `.jsonl` 文件。按文件大小取主 dataset 前 5 个候选后统计行数，最终选择行数最多的样本：495 行，raw 文件约 3.4 MB。仓库内固定 fixture 保留 parser 所需结构字段，但已移除 reasoning signature、usage/cost、真实本机路径和长文本内容。
 
 可复现命令：
 
@@ -75,7 +75,7 @@ assistant 工具名分布：
 
 所有 234 个 `toolCall` 都可从 `content[]` 中枚举出来。
 
-真实例子 1，`bash`，line 7：
+脱敏例子 1，`bash`，line 7：
 
 ```json
 {
@@ -89,7 +89,7 @@ assistant 工具名分布：
 }
 ```
 
-真实例子 2，`read`，line 15：
+脱敏例子 2，`read`，line 15：
 
 ```json
 {
@@ -97,9 +97,9 @@ assistant 工具名分布：
   "id": "call_10vgDMUT...ca61",
   "name": "read",
   "arguments": {
-    "path": "/Users/badlogic/workspaces/pi-mono/packages/coding-agent/src/core/extensions/loader.ts"
+    "path": "/workspace/pi-mono/packages/coding-agent/src/core/extensions/loader.ts"
   },
-  "partialJson": "{\"path\":\"/Users/badlogic/workspaces/.../loader.ts\"}"
+  "partialJson": "{\"path\":\"/workspace/pi-mono/.../loader.ts\"}"
 }
 ```
 
@@ -126,7 +126,7 @@ assistant 工具名分布：
 - `details` 是可选字段；这份样本里 69/234 条有，常见用途是截断信息，例如 `truncation`、`fullOutputPath`。
 - 234/234 个 `toolResult.toolCallId` 都能匹配到某个 assistant `toolCall.id`。
 
-真实例子，line 8：
+脱敏例子，line 8：
 
 ```json
 {
@@ -145,7 +145,7 @@ assistant 工具名分布：
 
 有。样本中出现 1 条独立 `bashExecution`，它也是 `type="message"`，但 `message.role="bashExecution"`。
 
-真实字段：
+脱敏 fixture 保留字段：
 
 | field | observed |
 | --- | --- |
@@ -159,7 +159,7 @@ assistant 工具名分布：
 | `excludeFromContext` | yes |
 | `toolCallId` | no |
 
-真实例子，line 265：
+脱敏例子，line 265：
 
 ```json
 {
@@ -201,7 +201,7 @@ assistant 工具名分布：
 
 ## 5. Token / Cost
 
-确认：assistant 消息上有 `message.usage`。本样本 235/235 条 assistant 消息都有 usage。
+确认：raw assistant 消息上有 `message.usage`，原始样本 235/235 条 assistant 消息都有 usage。固定 fixture 为避免提交成本/token 元数据，已移除 `message.usage`，因此 parser 实现必须把 usage 当作可选字段处理。
 
 `usage` 字段：
 
@@ -244,7 +244,7 @@ assistant 工具名分布：
 | assistant toolCall | `type=tool_call(name + arguments)` | ✅确认 | `toolCall` 块在 assistant `content[]` 中，字段为 `id/name/arguments/partialJson`。工具名分布为 bash/read/edit/write。 |
 | toolResult message | `type=observation(content / details / isError)` | ✅确认 | `toolResult.toolCallId` 对 `toolCall.id`，`details` 可选。建议 observation 保留 `toolName`、`content`、`isError`、`details`、`timestamp`。 |
 | bashExecution message | `type=tool_call + observation`，tool name 固定 bash | ⚠️需调整 | 样本有独立 `role="bashExecution"`，但它没有 `toolCallId`，也不是模型 bash toolCall 的重复副本。可将它映射为独立 local shell execution step，生成 synthetic id；不要用它覆盖或去重 assistant `name="bash"` toolCall。 |
-| message usage | trace metrics 的 token / cost | ✅确认 | assistant `usage` 全量存在，含 token 和 cost breakdown。建议按 assistant message 汇总到 trace metrics，也保留 per-step usage。 |
+| message usage | trace metrics 的 token / cost | ✅确认 raw、fixture 中移除 | raw assistant `usage` 全量存在，含 token 和 cost breakdown；固定 fixture 已脱敏移除。parser 应按可选字段处理 usage，存在时可汇总到 trace metrics。 |
 
 ## Parser 前置建议
 

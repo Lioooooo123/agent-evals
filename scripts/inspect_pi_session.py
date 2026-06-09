@@ -192,6 +192,60 @@ def print_counter(title: str, counter: Counter[str]) -> None:
         print(f"  {key}: {count}")
 
 
+def counter_json(counter: Counter[str]) -> dict[str, int]:
+    return dict(counter.most_common())
+
+
+def compact_example(item: dict[str, Any] | None) -> dict[str, Any] | None:
+    if item is None:
+        return None
+    return {
+        key: compact(value, limit=160)
+        for key, value in item.items()
+        if key in {"line", "id", "name", "arguments", "toolCallId", "toolName", "keys", "command", "exitCode"}
+    }
+
+
+def json_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    matched_results = sum(1 for pair in summary["result_pairs"] if pair["matched"])
+    first_tool_call = summary["tool_calls"][0] if summary["tool_calls"] else None
+    first_tool_result = summary["tool_results"][0] if summary["tool_results"] else None
+    first_bash_execution = (
+        summary["bash_executions"][0] if summary["bash_executions"] else None
+    )
+    return {
+        "line_count": summary["line_count"],
+        "top_types": counter_json(summary["top_types"]),
+        "roles": counter_json(summary["roles"]),
+        "content_types": counter_json(summary["content_types"]),
+        "assistant_content_types": counter_json(summary["assistant_content_types"]),
+        "tool_name_counts": counter_json(summary["tool_name_counts"]),
+        "tool_result_keys": counter_json(summary["tool_result_keys"]),
+        "usage_keys": counter_json(summary["usage_keys"]),
+        "cost_keys": counter_json(summary["cost_keys"]),
+        "assistant_tool_calls": len(summary["tool_calls"]),
+        "tool_results": len(summary["tool_results"]),
+        "bash_tool_calls": len(summary["bash_tool_calls"]),
+        "bash_tool_results": len(summary["bash_tool_results"]),
+        "bash_execution_messages": len(summary["bash_executions"]),
+        "tool_results_matched_to_tool_calls": {
+            "matched": matched_results,
+            "total": len(summary["result_pairs"]),
+        },
+        "bash_tool_call_ids_match_result_ids": summary["bash_call_ids"]
+        == summary["bash_result_ids"],
+        "bash_execution_tool_call_ids": sorted(summary["bash_execution_tool_ids"]),
+        "branch_points": len(summary["branch_points"]),
+        "root_children": len(summary["root_children"]),
+        "max_children": summary["max_children"],
+        "examples": {
+            "tool_call": compact_example(first_tool_call),
+            "tool_result": compact_example(first_tool_result),
+            "bash_execution": compact_example(first_bash_execution),
+        },
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -212,28 +266,7 @@ def main() -> None:
     summary = summarize(records)
 
     if args.json:
-        serializable = {
-            key: (dict(value) if isinstance(value, Counter) else value)
-            for key, value in summary.items()
-            if key
-            not in {
-                "bash_call_ids",
-                "bash_result_ids",
-                "bash_execution_tool_ids",
-                "branch_points",
-                "root_children",
-            }
-        }
-        serializable["bash_call_ids"] = sorted(summary["bash_call_ids"])
-        serializable["bash_result_ids"] = sorted(summary["bash_result_ids"])
-        serializable["bash_execution_tool_ids"] = sorted(
-            summary["bash_execution_tool_ids"]
-        )
-        serializable["branch_points"] = {
-            str(key): value for key, value in summary["branch_points"].items()
-        }
-        serializable["root_children"] = summary["root_children"]
-        print(json.dumps(serializable, ensure_ascii=False, indent=2))
+        print(json.dumps(json_summary(summary), ensure_ascii=False, indent=2))
         return
 
     print(f"File: {path}")
