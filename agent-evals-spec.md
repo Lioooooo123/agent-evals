@@ -241,6 +241,8 @@ Trace 是评分的一等数据，不只是日志。
 - `final`
 - `error`
 
+TraceStep 可选 `origin` 字段：`model`（默认）或 `non_model`，标记该 step 是否由被测模型发起。`tool_call_accuracy` 与 trajectory 评分只计 `origin=model` 的 step；`origin=non_model`（如独立 `bashExecution`）仅作上下文/审计。
+
 ### 7.4 EvalResult
 
 ```json
@@ -507,14 +509,18 @@ Pi session / event 到标准 trace 的映射：
 | assistant message text | `type=llm`，`summary` 为文本摘要 |
 | assistant content `toolCall` | `type=tool_call`，记录 tool name 和 arguments |
 | toolResult message | `type=observation`，记录 result content、details、isError |
-| bashExecution message | `type=tool_call` + `observation`，tool name 固定为 `bash` |
+| bashExecution message | 独立的非模型执行 step（`origin=non_model`），仅作上下文/审计，不计入 `tool_call_accuracy` |
 | message usage | trace metrics 的 token/cost |
 | extension `tool_call` event | `type=tool_call` |
 | extension `tool_result` event | `type=observation` |
 
 工具调用 scorer 优先使用 extension events；没有 events 时退回 session JSONL；再没有 session 时只做黑盒 outcome scoring。
 
-**bash 去重规则**：同一次 bash 执行可能同时以 assistant 的 `toolCall`（name=`bash`）和独立的 `bashExecution` 消息出现。trace 映射时必须把一次 bash 执行折叠成**恰好一个** trajectory 条目：默认以 `bashExecution` 消息为权威来源（它带完整 `command` / `output` / `exitCode`），并丢弃与之指向同一次执行的 `toolCall` / `toolResult`，避免 `tool_call_accuracy` 与 `trajectory_score` 重复计数。
+**bash 来源规则**：模型发起的 bash 走标准工具通道——assistant `toolCall(name="bash")` + `toolResult(toolName="bash")`，靠 `toolCall.id == toolResult.toolCallId` 配对，与 read/write/edit 等其它工具一视同仁，计入 `tool_call_accuracy` 与 `trajectory_score`。独立的 `bashExecution` 消息**不带 `toolCallId`**，结构上无法与任何模型 bash toolCall 配对，因此既不是模型 bash 的重复记录、也不属于模型工具轨迹；映射为一个 `origin=non_model` 的独立 step，仅作上下文/审计，排除在 `tool_call_accuracy` 之外。
+
+结论：常态下不存在 bash 双记，无需去重；要做的是**按来源区分两类 bash**，不要把非模型的 `bashExecution` 混进模型轨迹评分。
+
+（依据：`cases/fixtures/pi_session_sample.jsonl` 实测 97 对模型 bash toolCall/toolResult 全部 id 配对成功，1 条 bashExecution 无 toolCallId 且不重复。n=1，"不重复"有结构性依据——bashExecution 缺 toolCallId 天然配不上 toolCall；"bashExecution 由谁发起"待多份 session 进一步坐实。）
 
 ### 10.5 Pi Outcome Scorers
 
@@ -523,7 +529,7 @@ Pi code-agent eval 不能只看最终回答，必须检查真实 outcome：
 - `WorkspaceDiffScorer`：检查是否改了预期文件、是否改了禁止文件、diff 是否为空。
 - `CommandPassScorer`：运行 `expected.commands`。
 - `FinalAnswerGroundingScorer`：检查最终回答是否与测试和文件状态一致。
-- `PiToolTrajectoryScorer`：基于 session/event 检查工具名、参数和顺序。
+- `PiToolTrajectoryScorer`：基于 session/event 检查工具名、参数和顺序；只评模型发起的工具调用（`origin=model`），排除 `origin=non_model` 的 `bashExecution`。
 - `NoUncommittedNoiseScorer`：检查是否产生无关临时文件、大文件或敏感文件。
 
 ### 10.6 Faux Provider Regression Mode
@@ -641,7 +647,7 @@ gates:
 - answer rule scorer 覆盖 contains、must_not_contain、regex、JSON schema。
 - aggregate scorer 覆盖 hard fail 和权重。
 - compare 命令覆盖指标下降、修复、新增失败。
-- Pi session JSONL parser 能把 assistant toolCall、toolResult、bashExecution 映射为 trace steps（含 bash 去重规则，见 §10.4）。
+- Pi session JSONL parser 能把 assistant toolCall、toolResult、bashExecution 映射为 trace steps（含 bash 来源规则，见 §10.4）。
 
 ### 13.2 集成测试
 
