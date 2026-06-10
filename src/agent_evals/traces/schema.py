@@ -32,6 +32,7 @@ class ExpectedToolCall(BaseModel):
     tool_name: str
     arguments: JsonDict = Field(default_factory=dict)
     match_mode: Literal["exact", "strict", "unordered", "subset", "superset"] = "exact"
+    argument_match_mode: Literal["exact", "subset"] = "exact"
 
 
 class ExpectedWorkspace(BaseModel):
@@ -65,6 +66,8 @@ class EvalExpected(BaseModel):
 
     answer_contains: list[str] = Field(default_factory=list)
     answer_must_not_contain: list[str] = Field(default_factory=list)
+    answer_regex: list[str] = Field(default_factory=list)
+    answer_json_schema: JsonDict | None = None
     tool_calls: list[ExpectedToolCall] = Field(default_factory=list)
     workspace: ExpectedWorkspace | None = None
     commands: list[ExpectedCommand] = Field(default_factory=list)
