@@ -19,7 +19,9 @@ from agent_evals.scorers import (
     ExecutionMetricsScorer,
     ScoreResult,
     ScoringContext,
+    TaskSuccessJudgeScorer,
     ToolTrajectoryScorer,
+    judge_dimension_results,
 )
 from agent_evals.traces.schema import EvalCase, Trace
 
@@ -47,6 +49,8 @@ class RunOptions(BaseModel):
     out_dir: Path
     adapter_name: str = "mock"
     weights_path: Path = Path("configs/weights.yaml")
+    rubric_path: Path | None = Path("configs/judge_rubric.yaml")
+    judge_client: Any = None
     run_id: str | None = None
 
 
@@ -67,6 +71,11 @@ def run_eval(options: RunOptions) -> RunSummary:
     cases = load_eval_cases_jsonl(options.cases_path)
     adapter = _adapter(options.adapter_name)
     aggregate_scorer = AggregateScorer.from_yaml(options.weights_path)
+    judge_scorer = (
+        TaskSuccessJudgeScorer.from_yaml(options.rubric_path, client=options.judge_client)
+        if options.rubric_path is not None
+        else None
+    )
     deterministic_scorers = [
         AnswerRuleScorer(),
         ToolTrajectoryScorer(),
@@ -84,6 +93,10 @@ def run_eval(options: RunOptions) -> RunSummary:
         context = ScoringContext(score_results=score_results)
         for scorer in deterministic_scorers:
             score_results.append(scorer.score(case, trace, context))
+        if judge_scorer is not None:
+            judge_result = judge_scorer.score(case, trace, context)
+            score_results.append(judge_result)
+            score_results.extend(judge_dimension_results(judge_result))
         score_results.extend(_placeholder_scores(case, trace, score_results))
 
         aggregate = aggregate_scorer.score(

@@ -61,12 +61,20 @@ def write_eval_report(path: Path, run_id: str, records: list) -> None:
         f"- Average cost: ${summary['avg_cost_usd']:.6f}",
         f"- Average tool call accuracy: {_avg_score(records, 'tool_call_accuracy'):.3f}",
         f"- Average final answer correctness: {_avg_score(records, 'final_answer_correctness'):.3f}",
-        "",
-        "## Case Results",
-        "",
-        "| Case | Result | Aggregate | Failure | Reason |",
-        "| --- | --- | ---: | --- | --- |",
     ]
+    judge_notes = _judge_notes(records)
+    if judge_notes:
+        lines.extend(["", "## Judge", ""])
+        lines.extend(f"- {note}" for note in judge_notes)
+    lines.extend(
+        [
+            "",
+            "## Case Results",
+            "",
+            "| Case | Result | Aggregate | Failure | Reason |",
+            "| --- | --- | ---: | --- | --- |",
+        ]
+    )
     for record in records:
         result = "PASS" if record.passed else "FAIL"
         lines.append(
@@ -166,6 +174,23 @@ def _summary(records: list) -> dict:
 
 def _escape_table(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ")
+
+
+def _judge_notes(records: list) -> list[str]:
+    notes: list[str] = []
+    for record in records:
+        for result in record.score_results:
+            if (
+                result.name == "task_success_judge"
+                and result.metadata.get("status") == "skipped"
+            ):
+                note = (
+                    f"Judge skipped for `{record.case_id}`: {result.reason} "
+                    f"(rubric {result.metadata.get('rubric_version')})"
+                )
+                if note not in notes:
+                    notes.append(note)
+    return notes
 
 
 def _case_input(case: EvalCase) -> str:

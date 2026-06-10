@@ -10,7 +10,9 @@ from agent_evals.runners import RunOptions, run_eval
 SAMPLE_CASES = Path(__file__).resolve().parents[1] / "cases" / "sample.eval_cases.jsonl"
 
 
-def test_mock_run_pipeline_writes_complete_run_directory(tmp_path):
+def test_mock_run_pipeline_writes_complete_run_directory(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
     summary = run_eval(
         RunOptions(
             cases_path=SAMPLE_CASES,
@@ -66,6 +68,7 @@ def test_mock_run_pipeline_writes_complete_run_directory(tmp_path):
     assert "tool_arguments" in report
     assert "Failure Type Distribution" in report
     assert "Tag Slices" in report
+    assert "Judge skipped" in report
 
     with summary_path.open("r", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))

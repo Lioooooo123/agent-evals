@@ -37,6 +37,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to aggregate scorer weights YAML.",
     )
     run_parser.add_argument(
+        "--rubric",
+        default="configs/judge_rubric.yaml",
+        help="Path to judge rubric YAML. Use 'none' to disable judge scoring.",
+    )
+    run_parser.add_argument(
         "--run-id",
         help="Optional run id. Defaults to a UTC timestamp.",
     )
@@ -51,6 +56,7 @@ def _run(args: argparse.Namespace) -> int:
             out_dir=Path(args.out),
             adapter_name=args.adapter,
             weights_path=Path(args.weights),
+            rubric_path=None if args.rubric == "none" else Path(args.rubric),
             run_id=args.run_id,
         )
     )

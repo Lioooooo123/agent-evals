@@ -4,6 +4,11 @@ from agent_evals.scorers.aggregate import AggregateScorer
 from agent_evals.scorers.answer_rules import AnswerRuleScorer
 from agent_evals.scorers.base import ScoreResult, Scorer, ScoringContext
 from agent_evals.scorers.execution_metrics import ExecutionMetricsScorer
+from agent_evals.scorers.judge import (
+    JudgeRubricConfig,
+    TaskSuccessJudgeScorer,
+    judge_dimension_results,
+)
 from agent_evals.scorers.tool_trajectory import ToolTrajectoryScorer
 
 __all__ = [
@@ -13,5 +18,8 @@ __all__ = [
     "ScoreResult",
     "Scorer",
     "ScoringContext",
+    "JudgeRubricConfig",
+    "TaskSuccessJudgeScorer",
     "ToolTrajectoryScorer",
+    "judge_dimension_results",
 ]
