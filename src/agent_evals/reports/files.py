@@ -138,6 +138,7 @@ def write_failed_cases(
                 "",
                 "Trace:",
                 *_trace_summary(trace_payload),
+                *_trajectory_diff(record),
                 "",
                 "Reason:",
                 record.reason,
@@ -187,3 +188,50 @@ def _trace_summary(trace_payload: dict) -> list[str]:
         else:
             lines.append(f"{index}. [{step_type}] {step.get('summary', '')}")
     return lines
+
+
+def _trajectory_diff(record) -> list[str]:
+    if record.failure_type not in {"tool_selection", "tool_arguments", "tool_order"}:
+        return []
+    tool_result = next(
+        (
+            result
+            for result in record.score_results
+            if result.name == "tool_call_accuracy" and not result.passed
+        ),
+        None,
+    )
+    if tool_result is None:
+        return []
+    diagnostic = tool_result.metadata.get("diagnostic")
+    if not isinstance(diagnostic, dict):
+        return []
+
+    lines = ["", "Expected vs Actual:"]
+    expected_call = diagnostic.get("expected_call")
+    actual_call = diagnostic.get("actual_call")
+    if isinstance(expected_call, dict) or isinstance(actual_call, dict):
+        lines.append(f"- Expected: {_format_call(expected_call)}")
+        lines.append(f"- Actual:   {_format_call(actual_call)}")
+        return lines
+
+    expected_calls = diagnostic.get("expected_calls")
+    actual_calls = diagnostic.get("actual_calls")
+    if isinstance(expected_calls, list) or isinstance(actual_calls, list):
+        lines.append(f"- Expected: {_format_call_list(expected_calls)}")
+        lines.append(f"- Actual:   {_format_call_list(actual_calls)}")
+    return lines
+
+
+def _format_call(call: object) -> str:
+    if not isinstance(call, dict):
+        return "<missing>"
+    tool_name = call.get("tool_name", "<unknown>")
+    arguments = call.get("arguments", {})
+    return f"{tool_name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
+
+
+def _format_call_list(calls: object) -> str:
+    if not isinstance(calls, list):
+        return "<missing>"
+    return " -> ".join(_format_call(call) for call in calls)

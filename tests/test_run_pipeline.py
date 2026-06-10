@@ -43,10 +43,19 @@ def test_mock_run_pipeline_writes_complete_run_directory(tmp_path):
     ]
     assert len(result_rows) == 5
     assert len(list(traces_dir.glob("*.json"))) == 5
+    wrong_args_result = next(
+        row for row in result_rows if row["case_id"] == "sample_wrong_tool_args"
+    )
+    assert wrong_args_result["failure_type"] == "tool_arguments"
+    assert "expected order_id=A123, got A123_wrong" in wrong_args_result["reason"]
 
     failed_cases = failed_cases_path.read_text(encoding="utf-8")
     assert "sample_wrong_tool_args" in failed_cases
     assert "sample_missing_keyword" in failed_cases
+    assert "Failure: tool_arguments" in failed_cases
+    assert "Expected vs Actual:" in failed_cases
+    assert 'lookup_order({"order_id": "A123"})' in failed_cases
+    assert 'lookup_order({"order_id": "A123_wrong"})' in failed_cases
     assert "Trace:" in failed_cases
     assert "Reason:" in failed_cases
 
@@ -54,6 +63,7 @@ def test_mock_run_pipeline_writes_complete_run_directory(tmp_path):
     assert "Pass rate:" in report
     assert "sample_wrong_tool_args" in report
     assert "sample_missing_keyword" in report
+    assert "tool_arguments" in report
     assert "Failure Type Distribution" in report
     assert "Tag Slices" in report
 

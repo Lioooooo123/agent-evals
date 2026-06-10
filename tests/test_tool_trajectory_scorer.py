@@ -160,6 +160,56 @@ def test_tool_trajectory_match_modes_fail(mode, expected, actual):
     assert result.score == 0.0
 
 
+def test_tool_trajectory_diagnoses_tool_selection_failure():
+    result = ToolTrajectoryScorer().score(
+        _case(
+            [
+                {"tool_name": "read", "arguments": {"path": "a"}, "match_mode": "strict"},
+            ]
+        ),
+        _trace([("bash", {"command": "pytest"})]),
+        ScoringContext(),
+    )
+
+    assert result.failure_type == "tool_selection"
+    assert "missing expected tool" in result.reason
+
+
+def test_tool_trajectory_diagnoses_tool_arguments_failure():
+    result = ToolTrajectoryScorer().score(
+        _case(
+            [
+                {
+                    "tool_name": "lookup_order",
+                    "arguments": {"order_id": "A123"},
+                    "match_mode": "strict",
+                },
+            ]
+        ),
+        _trace([("lookup_order", {"order_id": "A123_wrong"})]),
+        ScoringContext(),
+    )
+
+    assert result.failure_type == "tool_arguments"
+    assert "expected order_id=A123, got A123_wrong" in result.reason
+
+
+def test_tool_trajectory_diagnoses_tool_order_failure():
+    result = ToolTrajectoryScorer().score(
+        _case(
+            [
+                {"tool_name": "read", "arguments": {"path": "a"}, "match_mode": "strict"},
+                {"tool_name": "bash", "arguments": {"command": "pytest"}, "match_mode": "strict"},
+            ]
+        ),
+        _trace([("bash", {"command": "pytest"}), ("read", {"path": "a"})]),
+        ScoringContext(),
+    )
+
+    assert result.failure_type == "tool_order"
+    assert "wrong order" in result.reason
+
+
 def test_tool_trajectory_supports_argument_subset_matching():
     result = ToolTrajectoryScorer().score(
         _case(
