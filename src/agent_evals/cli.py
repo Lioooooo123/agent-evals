@@ -29,8 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--adapter",
         default="mock",
-        choices=["mock"],
-        help="Adapter to use. Only mock is implemented in this phase.",
+        choices=["mock", "pi"],
+        help="Adapter to use.",
     )
     run_parser.add_argument(
         "--weights",

@@ -10,17 +10,21 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_evals.adapters import AgentAdapter, MockAgentAdapter
+from agent_evals.adapters import AgentAdapter, MockAgentAdapter, PiAgentAdapter
 from agent_evals.datasets import load_eval_cases_jsonl
 from agent_evals.reports.files import write_eval_report, write_failed_cases, write_summary_csv
 from agent_evals.scorers import (
     AggregateScorer,
     AnswerRuleScorer,
+    CommandPassScorer,
     ExecutionMetricsScorer,
+    FinalAnswerGroundingScorer,
+    NoUncommittedNoiseScorer,
     ScoreResult,
     ScoringContext,
     TaskSuccessJudgeScorer,
     ToolTrajectoryScorer,
+    WorkspaceDiffScorer,
     judge_dimension_results,
 )
 from agent_evals.traces.schema import EvalCase, Trace
@@ -81,6 +85,15 @@ def run_eval(options: RunOptions) -> RunSummary:
         ToolTrajectoryScorer(),
         ExecutionMetricsScorer(),
     ]
+    if options.adapter_name == "pi":
+        deterministic_scorers.extend(
+            [
+                WorkspaceDiffScorer(),
+                CommandPassScorer(),
+                FinalAnswerGroundingScorer(),
+                NoUncommittedNoiseScorer(),
+            ]
+        )
 
     records: list[CaseRunRecord] = []
     for case in cases:
@@ -117,6 +130,8 @@ def run_eval(options: RunOptions) -> RunSummary:
 def _adapter(name: str) -> AgentAdapter:
     if name == "mock":
         return MockAgentAdapter()
+    if name == "pi":
+        return PiAgentAdapter()
     raise ValueError(f"unsupported adapter: {name}")
 
 
