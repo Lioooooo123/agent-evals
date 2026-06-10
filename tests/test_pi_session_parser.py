@@ -43,14 +43,16 @@ def test_parse_pi_session_fixture_bash_mapping_counts():
 def test_parse_pi_session_fixture_bash_execution_is_non_model():
     trace = parse_pi_session_jsonl(FIXTURE)
 
+    non_model_steps = [step for step in trace.steps if step.origin == "non_model"]
     non_model_bash_steps = [
         step
-        for step in trace.steps
+        for step in non_model_steps
         if step.origin == "non_model"
         and step.tool_call is not None
         and step.tool_call.tool_name == "bash"
     ]
 
+    assert len(non_model_steps) == 1
     assert len(non_model_bash_steps) == 1
     assert non_model_bash_steps[0].observation is not None
     assert non_model_bash_steps[0].observation["exit_code"] == 0
