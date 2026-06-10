@@ -1,0 +1,5 @@
+gates:
+  task_success_rate:
+    fail_if_drop_greater_than: 0.03
+  tool_call_accuracy:
+    fail_if_drop_greater_than: 0.05
