@@ -114,6 +114,36 @@ def test_discover_pi_session_supports_explicit_and_session_dir_latest(tmp_path):
     assert discover_pi_session(explicit_case, session_dir) == (older, None)
 
 
+def test_prepare_workspace_writes_gitignore_so_pycache_is_excluded(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "app.py").write_text("x = 1\n", encoding="utf-8")
+    case = _case(source)
+
+    workspace = prepare_workspace(case, run_id="run_gi", base_work_dir=tmp_path / "runs")
+
+    gitignore = workspace / ".gitignore"
+    assert gitignore.exists(), ".gitignore must be written before baseline commit"
+    content = gitignore.read_text(encoding="utf-8")
+    assert "__pycache__/" in content
+    assert "*.pyc" in content
+    assert ".pytest_cache/" in content
+
+    # Simulate pytest creating __pycache__; it must not appear in git changed files
+    pycache = workspace / "__pycache__"
+    pycache.mkdir()
+    (pycache / "app.cpython-314.pyc").write_text("bytecode", encoding="utf-8")
+    result = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=str(workspace),
+        capture_output=True,
+        text=True,
+    )
+    assert "__pycache__" not in result.stdout, (
+        f"__pycache__ should be git-ignored but appeared in status:\n{result.stdout}"
+    )
+
+
 def test_pi_adapter_falls_back_to_black_box_when_session_parse_fails(tmp_path):
     source = tmp_path / "target"
     source.mkdir()
