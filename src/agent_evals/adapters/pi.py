@@ -64,9 +64,10 @@ class PiAgentAdapter:
         exit_code = 127
         status = "failed"
 
+        model = pi_config.get("model", "deepseek-v4-flash")
         try:
             completed = self.runner(
-                [self.pi_binary, "-p", task],
+                [self.pi_binary, "-p", task, "--model", model],
                 cwd=str(workspace),
                 env=_pi_env(session_dir),
                 timeout=timeout_s,
@@ -392,9 +393,22 @@ def _run_git(args: list[str], workspace: Path) -> str:
     return completed.stdout.strip()
 
 
+_GITIGNORE_CONTENT = (
+    "__pycache__/\n"
+    "*.pyc\n"
+    "*.pyo\n"
+    ".pytest_cache/\n"
+    ".ruff_cache/\n"
+    ".mypy_cache/\n"
+)
+
+
 def _ensure_git_baseline(workspace: Path) -> None:
     if (workspace / ".git").exists():
         return
+    gitignore = workspace / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text(_GITIGNORE_CONTENT, encoding="utf-8")
     subprocess.run(["git", "init"], cwd=str(workspace), capture_output=True, text=True, check=False)
     subprocess.run(["git", "add", "-A"], cwd=str(workspace), capture_output=True, text=True, check=False)
     env = os.environ.copy()

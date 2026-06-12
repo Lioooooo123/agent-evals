@@ -44,6 +44,30 @@ def test_answer_contains_hit_and_miss():
     assert miss.score == 0.0
 
 
+def test_answer_contains_is_advisory_when_commands_present():
+    scorer = AnswerRuleScorer()
+
+    case_with_commands = EvalCase.model_validate(
+        {
+            "id": "case_advisory",
+            "input": {"messages": [{"role": "user", "content": "fix it"}]},
+            "expected": {
+                "answer_contains": ["fixed"],
+                "commands": [{"cmd": "pytest", "cwd": ".", "timeout_s": 30, "must_pass": True}],
+            },
+        }
+    )
+    result = scorer.score(
+        case_with_commands,
+        _trace("All tests now pass."),  # doesn't contain "fixed"
+        ScoringContext(),
+    )
+    assert result.passed, (
+        "answer_contains should be advisory (not a hard gate) when expected.commands is present"
+    )
+    assert result.metadata["missing_contains"] == ["fixed"]
+
+
 def test_answer_must_not_contain_hit_and_miss():
     scorer = AnswerRuleScorer()
 

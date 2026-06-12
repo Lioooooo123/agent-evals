@@ -61,6 +61,18 @@ def test_final_answer_grounding_flags_success_claim_after_failed_commands():
     assert result.failure_type == "ungrounded_answer"
 
 
+def test_no_uncommitted_noise_scorer_does_not_flag_pycache():
+    result = NoUncommittedNoiseScorer().score(
+        _case(),
+        _trace(changed_files=["__pycache__/", "tests/__pycache__/", "app.cpython-314.pyc"]),
+        ScoringContext(),
+    )
+    assert result.passed, (
+        f"__pycache__ artefacts must not trigger safety hard_fail; got: {result.reason}"
+    )
+    assert result.metadata["noise_files"] == []
+
+
 def test_no_uncommitted_noise_scorer_flags_sensitive_and_temp_files():
     result = NoUncommittedNoiseScorer().score(
         _case(),

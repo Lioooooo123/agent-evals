@@ -29,7 +29,10 @@ class AnswerRuleScorer:
             for expected in case.expected.answer_contains
             if expected not in answer
         ]
-        if missing_contains:
+        # When the case has expected commands, execution results are the authoritative
+        # success signal; answer_contains becomes advisory only (not a hard gate).
+        has_commands = bool(case.expected.commands)
+        if missing_contains and not has_commands:
             failures.append(f"missing required text: {missing_contains}")
 
         forbidden_hits = [
